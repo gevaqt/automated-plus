@@ -80,7 +80,7 @@ jobs:
             printf -- '- Source SHA: %s\n' "${GITHUB_SHA}"
           } > "${target_file}"
 
-          if git diff --quiet -- "${target_file}"; then
+          if [[ -z "$(git status --porcelain -- "${target_file}")" ]]; then
             echo "No changes to commit."
             exit 0
           fi
