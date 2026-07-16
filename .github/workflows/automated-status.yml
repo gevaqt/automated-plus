@@ -1,0 +1,95 @@
+name: Automated Status Update
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  schedule:
+    # Runs at 07:00 and 19:00 Asia/Jakarta because GitHub cron uses UTC.
+    - cron: '0 0,12 * * *'
+  workflow_dispatch:
+    inputs:
+      timezone:
+        description: Timezone used in the generated timestamp
+        required: false
+        default: Asia/Jakarta
+      target_file:
+        description: File to update inside the repository
+        required: false
+        default: TIMESTAMP.md
+      commit_prefix:
+        description: Commit message prefix
+        required: false
+        default: "chore: refresh automated status"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automated-status-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TZ_NAME: "${{ github.event.inputs.timezone || 'Asia/Jakarta' }}"
+  TARGET_FILE: "${{ github.event.inputs.target_file || 'TIMESTAMP.md' }}"
+  COMMIT_PREFIX: "${{ github.event.inputs.commit_prefix || 'chore: refresh automated status' }}"
+
+jobs:
+  update-status:
+    name: Update repository status file
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update status file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="${GITHUB_REF_NAME}"
+          timezone="${TZ_NAME}"
+          target_file="${TARGET_FILE}"
+          commit_prefix="${COMMIT_PREFIX}"
+
+          if [[ -z "${target_file}" || "${target_file}" == /* || "${target_file}" == *..* ]]; then
+            echo "Invalid target_file: ${target_file}"
+            exit 1
+          fi
+
+          current_time="$(TZ="${timezone}" date '+%Y-%m-%d %H:%M:%S %Z')"
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          mkdir -p "$(dirname "${target_file}")"
+
+          {
+            printf '# Automated Status\n\n'
+            printf 'Last update: %s\n\n' "${current_time}"
+            printf -- '- Repository: %s\n' "${GITHUB_REPOSITORY}"
+            printf -- '- Branch: %s\n' "${branch}"
+            printf -- '- Event: %s\n' "${GITHUB_EVENT_NAME}"
+            printf -- '- Actor: %s\n' "${GITHUB_ACTOR}"
+            printf -- '- Run: %s\n' "${run_url}"
+            printf -- '- Source SHA: %s\n' "${GITHUB_SHA}"
+          } > "${target_file}"
+
+          if git diff --quiet -- "${target_file}"; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "${target_file}"
+          git commit -m "${commit_prefix}: ${current_time} [skip ci]"
+
+          if ! git push origin "HEAD:${branch}"; then
+            git pull --rebase origin "${branch}"
+            git push origin "HEAD:${branch}"
+          fi
